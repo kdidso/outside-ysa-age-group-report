@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>outside ysa age group report</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    :root{
+      --bg:#f7f8fa; --card:#fff; --ink:#333; --muted:#667085;
+      --border:#e5e7eb; --accent:#2c66c1; --accent2:#28a745;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,Helvetica,sans-serif}
+    .container{max-width:1000px;margin:36px auto;padding:0 20px}
+    h1{margin:0 0 8px;text-align:center;font-weight:700;text-transform:capitalize}
+    p.sub{margin:0 0 22px;text-align:center;color:var(--muted);font-size:14px}
+    #table-actions{display:flex;gap:10px;justify-content:flex-end;align-items:center;margin:8px 0}
+    select{padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:#fff}
+    #download-btn{background:var(--accent2);color:#fff;border:none;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px}
+    #download-btn:hover{filter:brightness(0.95)}
+    #table-container{background:var(--card);border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,.08);overflow:auto;max-height:520px}
+    table{width:100%;border-collapse:collapse;font-size:0.95rem}
+    thead th{position:sticky;top:0;background:#f4f6f8;border-bottom:1px solid var(--border);padding:10px 12px;text-align:left;font-weight:600}
+    td{border-bottom:1px solid var(--border);padding:10px 12px;vertical-align:top}
+    tr:nth-child(even){background:#fafafa}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:12px}
+    .count{margin:10px 0 0;color:var(--muted);font-size:13px;text-align:right}
+    .footer-note{margin:14px 0 0;color:var(--muted);font-size:12px;text-align:center}
+    a{color:var(--accent);text-decoration:none}
+    a:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>outside ysa age group report</h1>
+    <p class="sub">Showing members with Age <span class="badge">&lt; 26</span> or <span class="badge">&gt; 35</span>, sorted youngest → oldest</p>
+
+    <div id="table-actions">
+      <select id="format-select">
+        <option value="xlsx">Excel (.xlsx)</option>
+        <option value="csv">CSV (.csv)</option>
+      </select>
+      <button id="download-btn">Download</button>
+    </div>
+
+    <div id="table-container">
+      <table id="age-table">
+        <thead>
+          <tr>
+            <th>Last_Name</th>
+            <th>First_Name</th>
+            <th>Notes</th>
+            <th>Gender</th>
+            <th>Birth Date</th>
+            <th>Age</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="count" id="count"></div>
+    <p class="footer-note">
+      Data source: <a href="https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson" target="_blank" rel="noopener">member_locations_JSO.geojson</a>
+    </p>
+  </div>
+
+  <script>
+    // ---------- Config ----------
+    const MEMBERS_URL = 'https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson';
+    const MIN_AGE = 26, MAX_AGE = 35; // we show <26 OR >35
+
+    // ---------- Utils ----------
+    function firstAlphaTrim(s){
+      if(!s) return '';
+      s = String(s).trim();
+      let i = 0;
+      while(i < s.length && !/[A-Za-z]/.test(s[i])) i++;
+      return s.slice(i).trim();
+    }
+    function splitLastFirst(full){
+      if(!full) return {last:'', first:''};
+      const comma = String(full).indexOf(',');
+      if(comma === -1) return {last:firstAlphaTrim(full), first:''};
+      const last = firstAlphaTrim(full.slice(0, comma));
+      const first = firstAlphaTrim(full.slice(comma+1));
+      return {last, first};
+    }
+    function parseDOB(s){
+      if(!s) return null;
+      s = String(s).trim();
+      const tryFmt = (txt, fmt) => {
+        const MON = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+        if(fmt === 'D-MMM-YYYY' || fmt === 'D-MMM-YY'){
+          const m = txt.match(/^(\d{1,2})[-\s](\w{3})[-\s](\d{2,4})$/i);
+          if(!m) return null;
+          const d  = +m[1];
+          const mi = MON.indexOf(m[2].slice(0,3).toLowerCase());
+          if(mi < 0) return null;
+          let y = +m[3];
+          if(fmt === 'D-MMM-YY' && y < 100){ y = (y<=29)?2000+y:1900+y; }
+          return new Date(Date.UTC(y, mi, d));
+        }
+        if(fmt === 'D M YYYY'){
+          const m = txt.match(/^(\d{1,2})\s+(\w{3,})\s+(\d{4})$/i);
+          if(!m) return null;
+          const d  = +m[1];
+          const mi = MON.indexOf(m[2].slice(0,3).toLowerCase());
+          const y  = +m[3];
+          return new Date(Date.UTC(y, mi, d));
+        }
+        if(fmt === 'YYYY-MM-DD'){
+          const m = txt.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null;
+        }
+        if(fmt === 'MM/DD/YYYY' || fmt === 'M/D/YYYY'){
+          const m = txt.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+          return m ? new Date(Date.UTC(+m[3], +m[1]-1, +m[2])) : null;
+        }
+        return null;
+      };
+      return (
+        tryFmt(s,'D-MMM-YYYY') || tryFmt(s,'D-MMM-YY') ||
+        tryFmt(s,'D M YYYY')   || tryFmt(s,'YYYY-MM-DD') ||
+        tryFmt(s,'MM/DD/YYYY') || tryFmt(s,'M/D/YYYY')
+      );
+    }
+    function computeAge(d){
+      if(!(d instanceof Date) || isNaN(d)) return null;
+      const t = new Date();
+      let years = t.getUTCFullYear() - d.getUTCFullYear();
+      const m1 = t.getUTCMonth(), m2 = d.getUTCMonth();
+      const day1 = t.getUTCDate(), day2 = d.getUTCDate();
+      if (m1 < m2 || (m1 === m2 && day1 < day2)) years -= 1;
+      return years < 0 ? null : years;
+    }
+    const pick = (v, f='') => (v===undefined || v===null ? f : v);
+
+    // ---------- Load + Render ----------
+    async function loadMembers(){
+      const res = await fetch(MEMBERS_URL, {cache:'no-store'});
+      if(!res.ok) throw new Error('Failed to fetch member_locations_JSO.geojson');
+      return await res.json();
+    }
+
+    function normalizeAgeAndDOB(props){
+      let age = (props.Age === '' || props.Age === undefined || props.Age === null) ? null : Number(props.Age);
+      const birthRaw = pick(props['Birth Date'], pick(props.BirthDate, ''));
+      if ((age === null || Number.isNaN(age)) && birthRaw){
+        const dob = parseDOB(birthRaw);
+        age = computeAge(dob);
+      }
+      return { age, birthRaw };
+    }
+
+    async function updateTable(){
+      const data = await loadMembers();
+      const tbody = document.querySelector('#age-table tbody');
+      tbody.innerHTML = '';
+      window.filteredRows = [];
+
+      (data.features || []).forEach(f => {
+        const props = f.properties || {};
+
+        // Ensure Last/First if only Name exists
+        if ((!props.Last_Name || !props.First_Name) && props.Name){
+          const {last, first} = splitLastFirst(props.Name);
+          props.Last_Name = props.Last_Name || last;
+          props.First_Name = props.First_Name || first;
+        }
+
+        const { age, birthRaw } = normalizeAgeAndDOB(props);
+        if (age === null || Number.isNaN(age)) return;
+
+        if (age < MIN_AGE || age > MAX_AGE){
+          window.filteredRows.push({
+            Last_Name: pick(props.Last_Name, ''),
+            First_Name: pick(props.First_Name, ''),
+            Notes: pick(props.Notes, ''),
+            Gender: pick(props.Gender, ''),
+            'Birth Date': pick(birthRaw, ''),
+            Age: age
+          });
+        }
+      });
+
+      // ---- SORT: youngest → oldest (Age asc), then Last, then First
+      window.filteredRows.sort((a,b)=>{
+        if (a.Age !== b.Age) return a.Age - b.Age;
+        const ln = a.Last_Name.localeCompare(b.Last_Name, undefined, {sensitivity:'base'});
+        if (ln !== 0) return ln;
+        return a.First_Name.localeCompare(b.First_Name, undefined, {sensitivity:'base'});
+      });
+
+      // Render rows in sorted order
+      for (const r of window.filteredRows){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${r.Last_Name}</td>
+          <td>${r.First_Name}</td>
+          <td>${r.Notes}</td>
+          <td>${r.Gender}</td>
+          <td>${r['Birth Date']}</td>
+          <td>${r.Age}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      document.getElementById('count').textContent =
+        `${window.filteredRows.length} member(s) outside the 26–35 YSA age range.`;
+    }
+
+    function downloadTable(){
+      const fmt = document.getElementById('format-select').value;
+      // Already sorted; export in same order
+      const ws = XLSX.utils.json_to_sheet(window.filteredRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "OutsideYSA");
+      if (fmt === 'csv'){
+        XLSX.writeFile(wb, "outside_ysa_age_group_report.csv", { bookType:'csv' });
+      } else {
+        XLSX.writeFile(wb, "outside_ysa_age_group_report.xlsx");
+      }
+    }
+
+    document.getElementById('download-btn').addEventListener('click', downloadTable);
+    updateTable();
+  </script>
+</body>
+</html>
