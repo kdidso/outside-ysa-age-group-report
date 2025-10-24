@@ -67,11 +67,9 @@
   </div>
 
   <script>
-    // ---------- Config ----------
     const MEMBERS_URL = 'https://kdidso.github.io/snow-canyon-map/member_locations_JSO.geojson';
-    const MIN_AGE = 26, MAX_AGE = 35; // we show <26 OR >35
+    const MIN_AGE = 26, MAX_AGE = 35;
 
-    // ---------- Utils ----------
     function firstAlphaTrim(s){
       if(!s) return '';
       s = String(s).trim();
@@ -87,45 +85,58 @@
       const first = firstAlphaTrim(full.slice(comma+1));
       return {last, first};
     }
-    function parseDOB(s){
+
+    // --- Date parsing/formatting ---
+    function formatDateUTC(d){
+      const MMM = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const dd = String(d.getUTCDate()).padStart(2,'0');
+      const mon = MMM[d.getUTCMonth()];
+      const yyyy = d.getUTCFullYear();
+      return `${dd}-${mon}-${yyyy}`;
+    }
+
+    function parseDOBString(s){
       if(!s) return null;
       s = String(s).trim();
-      const tryFmt = (txt, fmt) => {
-        const MON = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-        if(fmt === 'D-MMM-YYYY' || fmt === 'D-MMM-YY'){
-          const m = txt.match(/^(\d{1,2})[-\s](\w{3})[-\s](\d{2,4})$/i);
-          if(!m) return null;
-          const d  = +m[1];
-          const mi = MON.indexOf(m[2].slice(0,3).toLowerCase());
-          if(mi < 0) return null;
+      const MON = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+
+      // 16-Nov-00 or 16-Nov-2000 or 2 Jun 1995 etc.
+      let m = s.match(/^(\d{1,2})[-\s](\w{3})[-\s](\d{2,4})$/i);
+      if(m){
+        const d = +m[1], mi = MON.indexOf(m[2].slice(0,3).toLowerCase());
+        if(mi >= 0){
           let y = +m[3];
-          if(fmt === 'D-MMM-YY' && y < 100){ y = (y<=29)?2000+y:1900+y; }
+          if(y < 100) y = (y<=29)?2000+y:1900+y;
           return new Date(Date.UTC(y, mi, d));
         }
-        if(fmt === 'D M YYYY'){
-          const m = txt.match(/^(\d{1,2})\s+(\w{3,})\s+(\d{4})$/i);
-          if(!m) return null;
-          const d  = +m[1];
-          const mi = MON.indexOf(m[2].slice(0,3).toLowerCase());
-          const y  = +m[3];
-          return new Date(Date.UTC(y, mi, d));
-        }
-        if(fmt === 'YYYY-MM-DD'){
-          const m = txt.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-          return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null;
-        }
-        if(fmt === 'MM/DD/YYYY' || fmt === 'M/D/YYYY'){
-          const m = txt.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-          return m ? new Date(Date.UTC(+m[3], +m[1]-1, +m[2])) : null;
-        }
-        return null;
-      };
-      return (
-        tryFmt(s,'D-MMM-YYYY') || tryFmt(s,'D-MMM-YY') ||
-        tryFmt(s,'D M YYYY')   || tryFmt(s,'YYYY-MM-DD') ||
-        tryFmt(s,'MM/DD/YYYY') || tryFmt(s,'M/D/YYYY')
-      );
+      }
+      m = s.match(/^(\d{1,2})\s+(\w{3,})\s+(\d{4})$/i);
+      if(m){
+        const d = +m[1], mi = MON.indexOf(m[2].slice(0,3).toLowerCase()), y = +m[3];
+        if(mi >= 0) return new Date(Date.UTC(y, mi, d));
+      }
+      m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if(m) return new Date(Date.UTC(+m[1], +m[2]-1, +m[3]));
+      m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if(m) return new Date(Date.UTC(+m[3], +m[1]-1, +m[2]));
+
+      return null;
     }
+
+    function parseDOBOrEpoch(val){
+      if (val === null || val === undefined || val === '') return null;
+
+      // If it's a number (or numeric string) treat as epoch ms (ArcGIS often uses ms UTC)
+      const num = Number(val);
+      if (!Number.isNaN(num) && Number.isFinite(num) && String(val).trim() !== ''){
+        // Accept wide range, including negatives (pre-1970)
+        return new Date(num);
+      }
+
+      // Otherwise try string formats
+      return parseDOBString(String(val));
+    }
+
     function computeAge(d){
       if(!(d instanceof Date) || isNaN(d)) return null;
       const t = new Date();
@@ -135,23 +146,21 @@
       if (m1 < m2 || (m1 === m2 && day1 < day2)) years -= 1;
       return years < 0 ? null : years;
     }
+
     const pick = (v, f='') => (v===undefined || v===null ? f : v);
 
-    // ---------- Load + Render ----------
     async function loadMembers(){
       const res = await fetch(MEMBERS_URL, {cache:'no-store'});
       if(!res.ok) throw new Error('Failed to fetch member_locations_JSO.geojson');
       return await res.json();
     }
 
-    function normalizeAgeAndDOB(props){
-      let age = (props.Age === '' || props.Age === undefined || props.Age === null) ? null : Number(props.Age);
-      const birthRaw = pick(props['Birth Date'], pick(props.BirthDate, ''));
-      if ((age === null || Number.isNaN(age)) && birthRaw){
-        const dob = parseDOB(birthRaw);
-        age = computeAge(dob);
+    function deriveNames(props){
+      if ((!props.Last_Name || !props.First_Name) && props.Name){
+        const {last, first} = splitLastFirst(props.Name);
+        props.Last_Name = props.Last_Name || last;
+        props.First_Name = props.First_Name || first;
       }
-      return { age, birthRaw };
     }
 
     async function updateTable(){
@@ -162,30 +171,29 @@
 
       (data.features || []).forEach(f => {
         const props = f.properties || {};
+        deriveNames(props);
 
-        // Ensure Last/First if only Name exists
-        if ((!props.Last_Name || !props.First_Name) && props.Name){
-          const {last, first} = splitLastFirst(props.Name);
-          props.Last_Name = props.Last_Name || last;
-          props.First_Name = props.First_Name || first;
-        }
-
-        const { age, birthRaw } = normalizeAgeAndDOB(props);
+        // prefer stored Age; else compute from Birth Date (string or epoch)
+        let age = (props.Age === '' || props.Age === undefined || props.Age === null) ? null : Number(props.Age);
+        const birthRaw = pick(props['Birth Date'], pick(props.BirthDate, ''));
+        const dob = parseDOBOrEpoch(birthRaw);
+        if ((age === null || Number.isNaN(age)) && dob) age = computeAge(dob);
         if (age === null || Number.isNaN(age)) return;
 
         if (age < MIN_AGE || age > MAX_AGE){
+          const birthDisplay = dob ? formatDateUTC(dob) : (birthRaw || '');
           window.filteredRows.push({
             Last_Name: pick(props.Last_Name, ''),
             First_Name: pick(props.First_Name, ''),
             Notes: pick(props.Notes, ''),
             Gender: pick(props.Gender, ''),
-            'Birth Date': pick(birthRaw, ''),
+            'Birth Date': birthDisplay,
             Age: age
           });
         }
       });
 
-      // ---- SORT: youngest → oldest (Age asc), then Last, then First
+      // sort youngest → oldest, then last/first
       window.filteredRows.sort((a,b)=>{
         if (a.Age !== b.Age) return a.Age - b.Age;
         const ln = a.Last_Name.localeCompare(b.Last_Name, undefined, {sensitivity:'base'});
@@ -193,7 +201,7 @@
         return a.First_Name.localeCompare(b.First_Name, undefined, {sensitivity:'base'});
       });
 
-      // Render rows in sorted order
+      // render
       for (const r of window.filteredRows){
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -213,7 +221,6 @@
 
     function downloadTable(){
       const fmt = document.getElementById('format-select').value;
-      // Already sorted; export in same order
       const ws = XLSX.utils.json_to_sheet(window.filteredRows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "OutsideYSA");
